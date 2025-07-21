@@ -1,4 +1,4 @@
-const Version = enum {
+pub const Version = enum {
     @"3.11.13",
     @"3.12.11",
     pub fn libName(self: Version) []const u8 {
