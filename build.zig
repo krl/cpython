@@ -401,7 +401,7 @@ fn packagePython(b: *std.Build, version: Version, upstream: *std.Build.Dependenc
     root: std.Build.LazyPath,
     exe: std.Build.LazyPath,
 } {
-    const write_files = b.addWriteFiles();
+    const write_files = b.addNamedWriteFiles(exe.name);
     _ = write_files.addCopyDirectory(upstream.path("Lib"), b.fmt("lib/python{s}", .{version.libName()}), .{});
     const empty_dir = b.addWriteFiles().getDirectory();
     _ = write_files.addCopyDirectory(empty_dir, b.fmt("lib/python{s}/lib-dynload", .{version.libName()}), .{});
