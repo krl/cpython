@@ -316,7 +316,6 @@ fn addMakesetup(
         ._elementtree = false,
         ._crypt = false,
         .nis = false,
-        ._ctypes = false,
         ._curses = false,
         ._curses_panel = false,
         ._sqlite3 = false,
@@ -337,11 +336,13 @@ fn addMakesetup(
         ._xxsubinterpreters = false,
     };
     const @"stdlib_modules_3.11.13" = .{
+        ._ctypes = true,
         ._typing = true,
         ._sha256 = true,
         ._sha512 = true,
     };
     const @"stdlib_modules_3.12.11" = .{
+        ._ctypes = false,
         ._sha2 = false,
         .xxsubtype = false,
         ._xxinterpchannels = false,
