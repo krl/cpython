@@ -1131,7 +1131,7 @@ const exe_config_set = struct {
 
         // File and library support
         .{ .HAVE_LARGEFILE_SUPPORT, "#include <sys/types.h>\nint main(){off_t offset = 0; return sizeof(offset) > 4;}" },
-        .{ .HAVE_LIBB2, "#include <blake2.h>\nint main(){blake2b_state state; return 0;}" },
+        .{ .HAVE_LIBB2, "#include <blake2.h>\nint main(){blake2b_state state; blake2s_final(&state, 0, 0); return 0;}" },
         .{ .HAVE_LIBDB, "#include <db.h>\nint main(){DB *db; return 0;}" },
         .{ .HAVE_LIBDL, "#include <dlfcn.h>\nint main(){dlopen(\"test\", RTLD_NOW); return 0;}" },
         .{ .HAVE_LIBDLD, "int main(){return 0;}" }, // DLD library check
