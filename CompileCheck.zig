@@ -264,20 +264,22 @@ fn getGeneratedFilePath(compile: *std.Build.Step.Compile, comptime tag_name: []c
     const maybe_path: ?*std.Build.GeneratedFile = @field(compile, tag_name);
 
     const generated_file = maybe_path orelse {
-        std.debug.lockStdErr();
-        const stderr = std.io.getStdErr();
-
-        std.Build.dumpBadGetPathHelp(&compile.step, stderr, compile.step.owner, asking_step) catch {};
-
+        {
+            std.debug.lockStdErr();
+            defer std.debug.unlockStdErr();
+            const stderr = std.io.getStdErr();
+            std.Build.dumpBadGetPathHelp(&compile.step, stderr, compile.step.owner, asking_step) catch {};
+        }
         @panic("missing emit option for " ++ tag_name);
     };
 
     const path = generated_file.path orelse {
-        std.debug.lockStdErr();
-        const stderr = std.io.getStdErr();
-
-        std.Build.dumpBadGetPathHelp(&compile.step, stderr, compile.step.owner, asking_step) catch {};
-
+        {
+            std.debug.lockStdErr();
+            defer std.debug.unlockStdErr();
+            const stderr = std.io.getStdErr();
+            std.Build.dumpBadGetPathHelp(&compile.step, stderr, compile.step.owner, asking_step) catch {};
+        }
         @panic(tag_name ++ " is null. Is there a missing step dependency?");
     };
 
