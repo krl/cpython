@@ -7,7 +7,8 @@ pub fn main() !void {
     // no need to free
 
     if (all_args.len <= 1) {
-        try std.io.getStdErr().writer().writeAll("usage: replace IN_FILE OUT_FILE NAME=VALUE...\n");
+        var stderr = std.fs.File.stderr().writer(&.{});
+        try stderr.interface.writeAll("usage: replace IN_FILE OUT_FILE NAME=VALUE...\n");
         std.process.exit(0xff);
     }
     const args = all_args[1..];
@@ -17,10 +18,7 @@ pub fn main() !void {
     const out_path = args[1];
     const replacements = args[2..];
 
-    var map: std.StringHashMapUnmanaged(struct {
-        count: usize,
-        value: []const u8,
-    }) = .{};
+    var map: std.StringHashMapUnmanaged(MapNode) = .{};
     for (replacements) |r| {
         const eq_index = std.mem.indexOfScalar(u8, r, '=') orelse errExit(
             "expected NAME=VALUE cmdline arg but got '{s}'",
@@ -41,9 +39,38 @@ pub fn main() !void {
 
     var out_file = try std.fs.cwd().createFile(out_path, .{});
     defer out_file.close();
-    var bw = std.io.bufferedWriter(out_file.writer());
-    const writer = bw.writer();
 
+    var out_file_buf: [4096]u8 = undefined;
+    var file_writer = out_file.writer(&out_file_buf);
+    writeFile(in_path, in, &map, &file_writer.interface) catch |err| switch (err) {
+        error.WriteFailed => return file_writer.err orelse error.Unexpected,
+    };
+
+    var unused_count: usize = 0;
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.count == 0) {
+            std.log.err("unused variable '{s}'", .{entry.key_ptr.*});
+            unused_count += 1;
+        }
+    }
+    if (unused_count != 0) {
+        std.log.err("{} unused variable(s), the did not appear in template '{s}'", .{ unused_count, in_path });
+        std.process.exit(0xff);
+    }
+}
+
+const MapNode = struct {
+    count: usize,
+    value: []const u8,
+};
+
+fn writeFile(
+    in_path: []const u8,
+    in: []const u8,
+    map: *const std.StringHashMapUnmanaged(MapNode),
+    writer: *std.Io.Writer,
+) error{WriteFailed}!void {
     var missing_count: usize = 0;
     var offset: usize = 0;
     while (true) {
@@ -65,21 +92,8 @@ pub fn main() !void {
         offset = end + 1;
     }
     try writer.writeAll(in[offset..]);
-    try bw.flush();
+    try writer.flush();
     if (missing_count > 0) errExit("{} missing variable(s) for template '{s}'", .{ missing_count, in_path });
-
-    var unused_count: usize = 0;
-    var it = map.iterator();
-    while (it.next()) |entry| {
-        if (entry.value_ptr.count == 0) {
-            std.log.err("unused variable '{s}'", .{entry.key_ptr.*});
-            unused_count += 1;
-        }
-    }
-    if (unused_count != 0) {
-        std.log.err("{} unused variable(s), the did not appear in template '{s}'", .{ unused_count, in_path });
-        std.process.exit(0xff);
-    }
 }
 
 fn errExit(comptime fmt: []const u8, args: anytype) noreturn {

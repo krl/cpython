@@ -432,17 +432,11 @@ fn addPythonExe(
 ) *std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = args.name,
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
     });
-
-    switch (args.pyconfig.version) {
-        .@"3.11.13" => {
-            // workaround dictobject.c memcpy alignment issue
-            exe.root_module.sanitize_c = false;
-        },
-        .@"3.12.11" => {},
-    }
 
     exe.root_module.addCMacro("Py_BUILD_CORE", "");
     exe.root_module.addCMacro("_GNU_SOURCE", "");
@@ -593,7 +587,15 @@ fn addPythonExe(
                 },
             }),
         },
-        .flags = &flags_common,
+        .flags = concat(b.allocator, &.{
+            &flags_common,
+            switch (args.pyconfig.version) {
+                // workaround dictobject.c memcpy alignment issue
+                .@"3.11.13" => &.{"-fno-sanitize=alignment"},
+                // tokenizer.c uses pointer overflow in restore_fstring_buffers
+                .@"3.12.11" => &.{"-fno-sanitize=pointer-overflow"},
+            },
+        }),
     });
 
     exe.addCSourceFile(.{
@@ -1235,7 +1237,7 @@ fn addPyconfig(
     };
 
     const config_header = b.addConfigHeader(.{
-        .style = .{ .autoconf = upstream.path("pyconfig.h.in") },
+        .style = .{ .autoconf_undef = upstream.path("pyconfig.h.in") },
         .include_path = "pyconfig.h",
     }, .{
         .ALIGNOF_LONG = 8,

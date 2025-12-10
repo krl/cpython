@@ -7,7 +7,8 @@ pub fn main() !void {
     // no need to free
 
     if (all_args.len <= 1) {
-        try std.io.getStdErr().writer().writeAll("usage: makesetup UPSTREAM_SRC OUT_DIR SETUP_FILES...\n");
+        var stderr = std.fs.File.stderr().writer(&.{});
+        try stderr.interface.writeAll("usage: makesetup UPSTREAM_SRC OUT_DIR SETUP_FILES...\n");
         std.process.exit(0xff);
     }
     const args = all_args[1..];
@@ -36,51 +37,67 @@ pub fn main() !void {
     {
         var file = try out_dir.createFile("config.c", .{});
         defer file.close();
-        var bw = std.io.bufferedWriter(file.writer());
-        const writer = bw.writer();
-        try writer.print("/* Generated automatically from {s} by makesetup. */\n", .{config_in_path});
-        var lines = std.mem.splitScalar(u8, config_in, '\n');
-        while (lines.next()) |line| {
-            if (std.mem.indexOf(u8, line, "MARKER 1")) |_| {
-                var it = setup.modules.iterator();
-                while (it.next()) |entry| {
-                    if (!entry.value_ptr.enabled) continue;
-                    try writer.print("extern PyObject* PyInit_{s}(void);\n", .{entry.key_ptr.*});
-                }
-            } else if (std.mem.indexOf(u8, line, "MARKER 2")) |_| {
-                var it = setup.modules.iterator();
-                while (it.next()) |entry| {
-                    if (!entry.value_ptr.enabled) continue;
-                    try writer.print("    {{\"{s}\", PyInit_{0s}}},\n", .{entry.key_ptr.*});
-                }
-            }
-            try writer.writeAll(line);
-            try writer.writeByte('\n');
-        }
-        try bw.flush();
+        var out_file_buf: [4096]u8 = undefined;
+        var file_writer = file.writer(&out_file_buf);
+        writeConfigC(setup, config_in_path, config_in, &file_writer.interface) catch |err| switch (err) {
+            error.WriteFailed => return file_writer.err orelse error.Unexpected,
+        };
     }
 
     {
         var out_file = try out_dir.createFile("module-compile-args.txt", .{});
         defer out_file.close();
-        var bw = std.io.bufferedWriter(out_file.writer());
-        const writer = bw.writer();
-
-        var it = setup.modules.iterator();
-        while (it.next()) |entry| {
-            const module_name = entry.key_ptr.*;
-            {
-                const suffix: []const u8 = if (entry.value_ptr.enabled) "" else " (DISABLED)";
-                try writer.print("# Module '{s}'{s}\n", .{ module_name, suffix });
-            }
-            const prefix: []const u8 = if (entry.value_ptr.enabled) "" else "# ";
-            for (entry.value_ptr.compile_args) |compile_arg| switch (compile_arg) {
-                .source => |src| try writer.print("{s}Modules/{s}\n", .{ prefix, src }),
-                .include => |inc| try writer.print("{s}-I{s}\n", .{ prefix, inc }),
-            };
-        }
-        try bw.flush();
+        var out_file_buf: [4096]u8 = undefined;
+        var file_writer = out_file.writer(&out_file_buf);
+        writeCompileArgs(setup, &file_writer.interface) catch |err| switch (err) {
+            error.WriteFailed => return file_writer.err orelse error.Unexpected,
+        };
     }
+}
+
+fn writeConfigC(
+    setup: Setup,
+    config_in_path: []const u8,
+    config_in: []const u8,
+    writer: *std.Io.Writer,
+) error{WriteFailed}!void {
+    try writer.print("/* Generated automatically from {s} by makesetup. */\n", .{config_in_path});
+    var lines = std.mem.splitScalar(u8, config_in, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "MARKER 1")) |_| {
+            var it = setup.modules.iterator();
+            while (it.next()) |entry| {
+                if (!entry.value_ptr.enabled) continue;
+                try writer.print("extern PyObject* PyInit_{s}(void);\n", .{entry.key_ptr.*});
+            }
+        } else if (std.mem.indexOf(u8, line, "MARKER 2")) |_| {
+            var it = setup.modules.iterator();
+            while (it.next()) |entry| {
+                if (!entry.value_ptr.enabled) continue;
+                try writer.print("    {{\"{s}\", PyInit_{0s}}},\n", .{entry.key_ptr.*});
+            }
+        }
+        try writer.writeAll(line);
+        try writer.writeByte('\n');
+    }
+    try writer.flush();
+}
+
+fn writeCompileArgs(setup: Setup, writer: *std.Io.Writer) error{WriteFailed}!void {
+    var it = setup.modules.iterator();
+    while (it.next()) |entry| {
+        const module_name = entry.key_ptr.*;
+        {
+            const suffix: []const u8 = if (entry.value_ptr.enabled) "" else " (DISABLED)";
+            try writer.print("# Module '{s}'{s}\n", .{ module_name, suffix });
+        }
+        const prefix: []const u8 = if (entry.value_ptr.enabled) "" else "# ";
+        for (entry.value_ptr.compile_args) |compile_arg| switch (compile_arg) {
+            .source => |src| try writer.print("{s}Modules/{s}\n", .{ prefix, src }),
+            .include => |inc| try writer.print("{s}-I{s}\n", .{ prefix, inc }),
+        };
+    }
+    try writer.flush();
 }
 
 const CompileArg = union(enum) {

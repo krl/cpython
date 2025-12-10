@@ -146,7 +146,7 @@ fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!voi
     const source_path = check.source_path.getPath2(b, step);
 
     const result = blk: {
-        var zig_args: std.ArrayList([]const u8) = .init(b.allocator);
+        var zig_args: std.array_list.Managed([]const u8) = .init(b.allocator);
         defer zig_args.deinit();
         try zig_args.append(b.graph.zig_exe);
         try zig_args.append(switch (check.kind) {
@@ -170,7 +170,7 @@ fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!voi
                     .other_step => |other| {
                         switch (other.kind) {
                             .exe => return step.fail("cannot link with an executable build artifact", .{}),
-                            .@"test" => return step.fail("cannot link with a test", .{}),
+                            .@"test", .test_obj => return step.fail("cannot link with a test", .{}),
                             .obj => {
                                 try zig_args.append(other.getEmittedBin().getPath2(b, step));
                             },
@@ -248,7 +248,7 @@ fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!voi
                 .undeclared_identifier_count = undeclared_identifier_count,
             } };
         },
-        inline else => return step.fail("zig {}", .{fmtTerm(result.term)}),
+        inline else => return step.fail("zig {f}", .{fmtTerm(result.term)}),
     }
 }
 
@@ -265,20 +265,18 @@ fn getGeneratedFilePath(compile: *std.Build.Step.Compile, comptime tag_name: []c
 
     const generated_file = maybe_path orelse {
         {
-            std.debug.lockStdErr();
-            defer std.debug.unlockStdErr();
-            const stderr = std.io.getStdErr();
-            std.Build.dumpBadGetPathHelp(&compile.step, stderr, compile.step.owner, asking_step) catch {};
+            const stderr = std.debug.lockStderrWriter(&.{});
+            defer std.debug.unlockStderrWriter();
+            std.Build.dumpBadGetPathHelp(&compile.step, stderr, .detect(.stderr()), compile.step.owner, asking_step) catch {};
         }
         @panic("missing emit option for " ++ tag_name);
     };
 
     const path = generated_file.path orelse {
         {
-            std.debug.lockStdErr();
-            defer std.debug.unlockStdErr();
-            const stderr = std.io.getStdErr();
-            std.Build.dumpBadGetPathHelp(&compile.step, stderr, compile.step.owner, asking_step) catch {};
+            const stderr = std.debug.lockStderrWriter(&.{});
+            defer std.debug.unlockStderrWriter();
+            std.Build.dumpBadGetPathHelp(&compile.step, stderr, .detect(.stderr()), compile.step.owner, asking_step) catch {};
         }
         @panic(tag_name ++ " is null. Is there a missing step dependency?");
     };
@@ -286,17 +284,10 @@ fn getGeneratedFilePath(compile: *std.Build.Step.Compile, comptime tag_name: []c
     return path;
 }
 
-fn fmtTerm(term: ?std.process.Child.Term) std.fmt.Formatter(formatTerm) {
+fn fmtTerm(term: ?std.process.Child.Term) std.fmt.Alt(?std.process.Child.Term, formatTerm) {
     return .{ .data = term };
 }
-fn formatTerm(
-    term: ?std.process.Child.Term,
-    comptime fmt: []const u8,
-    options: std.fmt.FormatOptions,
-    writer: anytype,
-) !void {
-    _ = fmt;
-    _ = options;
+fn formatTerm(term: ?std.process.Child.Term, writer: *std.Io.Writer) error{WriteFailed}!void {
     if (term) |t| switch (t) {
         .Exited => |code| try writer.print("exited with code {}", .{code}),
         .Signal => |sig| try writer.print("terminated with signal {}", .{sig}),
