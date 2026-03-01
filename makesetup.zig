@@ -1,13 +1,16 @@
-pub fn main() !void {
-    var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    // no need to free
-    const arena = arena_instance.allocator();
+const std = @import("std");
+const Io = std.Io;
+const print = std.debug.print;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const Allocator = std.mem.Allocator;
 
-    const all_args = try std.process.argsAlloc(arena);
-    // no need to free
+pub fn main(init: std.process.Init) !void {
+    const arena = init.arena.allocator();
+    const all_args = try init.minimal.args.toSlice(arena);
+    const io = init.io;
 
     if (all_args.len <= 1) {
-        var stderr = std.fs.File.stderr().writer(&.{});
+        var stderr = std.Io.File.stderr().writer(io, &.{});
         try stderr.interface.writeAll("usage: makesetup UPSTREAM_SRC OUT_DIR SETUP_FILES...\n");
         std.process.exit(0xff);
     }
@@ -18,37 +21,30 @@ pub fn main() !void {
     const out_path = args[1];
     const setup_files = args[2..];
 
-    const setup = try parseSetupFiles(arena, setup_files);
+    const setup = try parseSetupFiles(arena, io, setup_files);
 
-    const config_in_path = std.fs.path.join(arena, &.{ upstream_src, "Modules", "config.c.in" }) catch |e| oom(e);
-    const config_in = blk: {
-        const config_in = std.fs.cwd().openFile(config_in_path, .{}) catch |e| std.debug.panic(
-            "open file '{s}' failed with {s}",
-            .{ config_in_path, @errorName(e) },
-        );
-        defer config_in.close();
-        break :blk try config_in.readToEndAlloc(arena, std.math.maxInt(usize));
-    };
-    // no need to free
+    const config_in_path = std.Io.Dir.path.join(arena, &.{ upstream_src, "Modules", "config.c.in" }) catch |e| oom(e);
+    const config_in = std.Io.Dir.cwd().readFileAlloc(io, config_in_path, arena, .unlimited) catch |e|
+        std.debug.panic("open file '{s}' failed with {t}", .{ config_in_path, e });
 
-    var out_dir = try std.fs.cwd().makeOpenPath(out_path, .{});
-    defer out_dir.close();
+    var out_dir = try std.Io.Dir.cwd().createDirPathOpen(io, out_path, .{});
+    defer out_dir.close(io);
 
     {
-        var file = try out_dir.createFile("config.c", .{});
-        defer file.close();
+        var file = try out_dir.createFile(io, "config.c", .{});
+        defer file.close(io);
         var out_file_buf: [4096]u8 = undefined;
-        var file_writer = file.writer(&out_file_buf);
+        var file_writer = file.writer(io, &out_file_buf);
         writeConfigC(setup, config_in_path, config_in, &file_writer.interface) catch |err| switch (err) {
             error.WriteFailed => return file_writer.err orelse error.Unexpected,
         };
     }
 
     {
-        var out_file = try out_dir.createFile("module-compile-args.txt", .{});
-        defer out_file.close();
+        var out_file = try out_dir.createFile(io, "module-compile-args.txt", .{});
+        defer out_file.close(io);
         var out_file_buf: [4096]u8 = undefined;
-        var file_writer = out_file.writer(&out_file_buf);
+        var file_writer = out_file.writer(io, &out_file_buf);
         writeCompileArgs(setup, &file_writer.interface) catch |err| switch (err) {
             error.WriteFailed => return file_writer.err orelse error.Unexpected,
         };
@@ -117,25 +113,18 @@ const Setup = struct {
     modules: std.StringArrayHashMapUnmanaged(Module) = .{},
 };
 
-fn parseSetupFiles(allocator: std.mem.Allocator, setup_files: []const []const u8) !Setup {
+fn parseSetupFiles(arena: std.mem.Allocator, io: Io, setup_files: []const []const u8) !Setup {
     var setup: Setup = .{};
     for (setup_files) |file_path| {
-        const content = blk: {
-            var file = std.fs.cwd().openFile(file_path, .{}) catch |e| std.debug.panic(
-                "open '{s}' failed with {s}",
-                .{ file_path, @errorName(e) },
-            );
-            defer file.close();
-            break :blk try file.readToEndAlloc(allocator, std.math.maxInt(usize));
-        };
-        // DO NOT FREE content (we slice into the content and save references to it)
-        try parseSetupFile(allocator, &setup, file_path, content);
+        const content = std.Io.Dir.cwd().readFileAlloc(io, file_path, arena, .unlimited) catch |e|
+            std.debug.panic("open '{s}' failed with {t}", .{ file_path, e });
+        try parseSetupFile(arena, &setup, file_path, content);
     }
     return setup;
 }
 
 fn parseSetupFile(
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     setup: *Setup,
     file_path: []const u8,
     content: []const u8,
@@ -143,7 +132,7 @@ fn parseSetupFile(
     var kind: ?Kind = null;
     var block_enabled: bool = true;
     var defs: std.StringHashMapUnmanaged([]const u8) = .{};
-    defer defs.deinit(allocator);
+    defer defs.deinit(arena);
 
     var lineno: u32 = 1;
     var line_it = std.mem.splitScalar(u8, content, '\n');
@@ -160,7 +149,7 @@ fn parseSetupFile(
         } else if (std.mem.indexOfScalar(u8, line, '=')) |eq_index| {
             const name = line[0..eq_index];
             const value = line[eq_index + 1 ..];
-            defs.put(allocator, name, value) catch |e| oom(e);
+            defs.put(arena, name, value) catch |e| oom(e);
         } else {
             // # Lines have the following structure:
             // #
@@ -199,18 +188,18 @@ fn parseSetupFile(
                 if (std.mem.startsWith(u8, part, "#")) {
                     break;
                 } else if (std.mem.endsWith(u8, part, ".c")) {
-                    compile_args.append(allocator, .{ .source = part }) catch |e| oom(e);
+                    compile_args.append(arena, .{ .source = part }) catch |e| oom(e);
                 } else if (std.mem.endsWith(u8, part, ".a")) {
-                    libraries.append(allocator, part) catch |e| oom(e);
+                    libraries.append(arena, part) catch |e| oom(e);
                 } else if (std.mem.startsWith(u8, part, "-D")) {
                     if (part.len == 2) errExit("{s}:{}: expected '-DDEFINE' but just got '-D'", .{ file_path, lineno });
-                    defines.append(allocator, part[2..]) catch |e| oom(e);
+                    defines.append(arena, part[2..]) catch |e| oom(e);
                 } else if (std.mem.startsWith(u8, part, "-I")) {
                     if (part.len == 2) errExit("{s}:{}: expected '-IPATH' but just got '-I'", .{ file_path, lineno });
-                    compile_args.append(allocator, .{ .include = part[2..] }) catch |e| oom(e);
+                    compile_args.append(arena, .{ .include = part[2..] }) catch |e| oom(e);
                 } else if (std.mem.startsWith(u8, part, "-l")) {
                     if (part.len == 2) errExit("{s}:{}: expected '-lLIB' but just got '-l'", .{ file_path, lineno });
-                    libs.append(allocator, part[2..]) catch |e| oom(e);
+                    libs.append(arena, part[2..]) catch |e| oom(e);
                 } else if (std.mem.eql(u8, part, "\\")) {
                     if (parts.next()) |_| errExit("{s}:{}: stray '\\' not at end of line", .{ file_path, lineno });
                     const next_line = line_it.next() orelse break;
@@ -219,7 +208,7 @@ fn parseSetupFile(
                 } else std.debug.panic("{s}:{}: handle part '{s}' from this line '{s}'", .{ file_path, lineno, part, line });
             }
 
-            const entry = setup.modules.getOrPut(allocator, name) catch |e| oom(e);
+            const entry = setup.modules.getOrPut(arena, name) catch |e| oom(e);
             if (entry.found_existing) {
                 if (!block_enabled) continue;
                 if (entry.value_ptr.enabled) {
@@ -229,9 +218,9 @@ fn parseSetupFile(
             entry.value_ptr.* = .{
                 .kind = kind,
                 .enabled = block_enabled,
-                .defines = defines.toOwnedSlice(allocator) catch |e| oom(e),
-                .compile_args = compile_args.toOwnedSlice(allocator) catch |e| oom(e),
-                .libs = libs.toOwnedSlice(allocator) catch |e| oom(e),
+                .defines = defines.toOwnedSlice(arena) catch |e| oom(e),
+                .compile_args = compile_args.toOwnedSlice(arena) catch |e| oom(e),
+                .libs = libs.toOwnedSlice(arena) catch |e| oom(e),
             };
         }
     }
@@ -298,8 +287,3 @@ fn errExit(comptime fmt: []const u8, args: anytype) noreturn {
     std.log.err(fmt, args);
     std.process.exit(0xff);
 }
-
-const std = @import("std");
-const print = std.debug.print;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
-const Allocator = std.mem.Allocator;

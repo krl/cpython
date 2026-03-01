@@ -1,5 +1,7 @@
 const CompileCheck = @This();
 
+const std = @import("std");
+
 step: std.Build.Step,
 target: std.Build.ResolvedTarget,
 kind: Kind,
@@ -187,19 +189,18 @@ fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!voi
                             },
                         }
                     },
-                    else => |o| std.debug.panic("todo: handle link object {s}", .{@tagName(o)}),
+                    else => |o| std.debug.panic("todo: handle link object {t}", .{o}),
                 }
             }
         }
-        break :blk try std.process.Child.run(.{
-            .allocator = b.allocator,
+        break :blk try std.process.run(b.allocator, b.graph.io, .{
             .argv = zig_args.items,
         });
     };
 
     std.debug.assert(result.stdout.len == 0);
     switch (result.term) {
-        .Exited => |code| if (code == 0) {
+        .exited => |code| if (code == 0) {
             std.debug.assert(result.stderr.len == 0);
             check.result = .pass;
         } else {
@@ -209,7 +210,7 @@ fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!voi
             var found_header = false;
             var line_it = std.mem.splitScalar(u8, result.stderr, '\n');
             while (line_it.next()) |line_untrimmed| {
-                const line = std.mem.trimRight(u8, line_untrimmed, "\r");
+                const line = std.mem.trimEnd(u8, line_untrimmed, "\r");
                 if (line.len == 0) continue;
 
                 const error_prefix = "error: ";
@@ -265,18 +266,18 @@ fn getGeneratedFilePath(compile: *std.Build.Step.Compile, comptime tag_name: []c
 
     const generated_file = maybe_path orelse {
         {
-            const stderr = std.debug.lockStderrWriter(&.{});
-            defer std.debug.unlockStderrWriter();
-            std.Build.dumpBadGetPathHelp(&compile.step, stderr, .detect(.stderr()), compile.step.owner, asking_step) catch {};
+            const stderr = std.debug.lockStderr(&.{});
+            defer std.debug.unlockStderr();
+            std.Build.dumpBadGetPathHelp(&compile.step, stderr.terminal(), compile.step.owner, asking_step) catch {};
         }
         @panic("missing emit option for " ++ tag_name);
     };
 
     const path = generated_file.path orelse {
         {
-            const stderr = std.debug.lockStderrWriter(&.{});
-            defer std.debug.unlockStderrWriter();
-            std.Build.dumpBadGetPathHelp(&compile.step, stderr, .detect(.stderr()), compile.step.owner, asking_step) catch {};
+            const stderr = std.debug.lockStderr(&.{});
+            defer std.debug.unlockStderr();
+            std.Build.dumpBadGetPathHelp(&compile.step, stderr.terminal(), compile.step.owner, asking_step) catch {};
         }
         @panic(tag_name ++ " is null. Is there a missing step dependency?");
     };
@@ -289,13 +290,11 @@ fn fmtTerm(term: ?std.process.Child.Term) std.fmt.Alt(?std.process.Child.Term, f
 }
 fn formatTerm(term: ?std.process.Child.Term, writer: *std.Io.Writer) error{WriteFailed}!void {
     if (term) |t| switch (t) {
-        .Exited => |code| try writer.print("exited with code {}", .{code}),
-        .Signal => |sig| try writer.print("terminated with signal {}", .{sig}),
-        .Stopped => |sig| try writer.print("stopped with signal {}", .{sig}),
-        .Unknown => |code| try writer.print("terminated for unknown reason with code {}", .{code}),
+        .exited => |code| try writer.print("exited with code {}", .{code}),
+        .signal => |sig| try writer.print("terminated with signal {}", .{sig}),
+        .stopped => |sig| try writer.print("stopped with signal {}", .{sig}),
+        .unknown => |code| try writer.print("terminated for unknown reason with code {}", .{code}),
     } else {
         try writer.writeAll("exited with any code");
     }
 }
-
-const std = @import("std");

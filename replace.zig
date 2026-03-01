@@ -1,13 +1,13 @@
-pub fn main() !void {
-    var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    // no need to free
-    const arena = arena_instance.allocator();
+const std = @import("std");
+const Io = std.Io;
 
-    const all_args = try std.process.argsAlloc(arena);
-    // no need to free
+pub fn main(init: std.process.Init) !void {
+    const arena = init.arena.allocator();
+    const all_args = try init.minimal.args.toSlice(arena);
+    const io = init.io;
 
     if (all_args.len <= 1) {
-        var stderr = std.fs.File.stderr().writer(&.{});
+        var stderr = std.Io.File.stderr().writer(io, &.{});
         try stderr.interface.writeAll("usage: replace IN_FILE OUT_FILE NAME=VALUE...\n");
         std.process.exit(0xff);
     }
@@ -27,21 +27,14 @@ pub fn main() !void {
         try map.put(arena, r[0..eq_index], .{ .count = 0, .value = r[eq_index + 1 ..] });
     }
 
-    const in = blk: {
-        const file = std.fs.cwd().openFile(in_path, .{}) catch |e| std.debug.panic(
-            "open '{s}' failed with {s}",
-            .{ in_path, @errorName(e) },
-        );
-        defer file.close();
-        break :blk try file.readToEndAlloc(arena, std.math.maxInt(usize));
-    };
-    // no need to free
+    const in = std.Io.Dir.cwd().readFileAlloc(io, in_path, arena, .unlimited) catch |e|
+        std.debug.panic("open '{s}' failed with {t}", .{ in_path, e });
 
-    var out_file = try std.fs.cwd().createFile(out_path, .{});
-    defer out_file.close();
+    var out_file = try std.Io.Dir.cwd().createFile(io, out_path, .{});
+    defer out_file.close(io);
 
     var out_file_buf: [4096]u8 = undefined;
-    var file_writer = out_file.writer(&out_file_buf);
+    var file_writer = out_file.writer(io, &out_file_buf);
     writeFile(in_path, in, &map, &file_writer.interface) catch |err| switch (err) {
         error.WriteFailed => return file_writer.err orelse error.Unexpected,
     };
@@ -100,5 +93,3 @@ fn errExit(comptime fmt: []const u8, args: anytype) noreturn {
     std.log.err(fmt, args);
     std.process.exit(0xff);
 }
-
-const std = @import("std");

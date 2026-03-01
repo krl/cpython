@@ -435,6 +435,7 @@ fn addPythonExe(
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         }),
     });
 
@@ -459,17 +460,17 @@ fn addPythonExe(
         else => std.debug.panic("todo: populate PLATFORM for os '{s}'", .{@tagName(target.result.os.tag)}),
     });
     switch (args.pyconfig.header) {
-        .path => |path| exe.addIncludePath(path.dirname()),
-        .config_header => |h| exe.addConfigHeader(h),
+        .path => |path| exe.root_module.addIncludePath(path.dirname()),
+        .config_header => |h| exe.root_module.addConfigHeader(h),
     }
-    exe.addIncludePath(upstream.path("."));
-    exe.addIncludePath(upstream.path("Include"));
-    exe.addIncludePath(upstream.path("Include/internal"));
+    exe.root_module.addIncludePath(upstream.path("."));
+    exe.root_module.addIncludePath(upstream.path("Include"));
+    exe.root_module.addIncludePath(upstream.path("Include/internal"));
     if (args.stage.stage2FrozenMods()) |mods| {
-        exe.addIncludePath(mods.getpath_h.dirname().dirname());
-        exe.addIncludePath(mods.importlib_bootstrap_h.dirname().dirname().dirname());
-        exe.addIncludePath(mods.importlib_bootstrap_external_h.dirname().dirname().dirname());
-        exe.addIncludePath(mods.zipimport_h.dirname().dirname().dirname());
+        exe.root_module.addIncludePath(mods.getpath_h.dirname().dirname());
+        exe.root_module.addIncludePath(mods.importlib_bootstrap_h.dirname().dirname().dirname());
+        exe.root_module.addIncludePath(mods.importlib_bootstrap_external_h.dirname().dirname().dirname());
+        exe.root_module.addIncludePath(mods.zipimport_h.dirname().dirname().dirname());
     }
 
     switch (args.stage) {
@@ -477,7 +478,7 @@ fn addPythonExe(
         .final => |final| switch (args.pyconfig.version) {
             .@"3.11.13" => {},
             else => for (final.frozen_headers) |h| {
-                exe.addIncludePath(h.dirname().dirname());
+                exe.root_module.addIncludePath(h.dirname().dirname());
             },
         },
     }
@@ -499,12 +500,11 @@ fn addPythonExe(
         const add_modules_make = struct {
             fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
                 _ = options;
+                const io = step.owner.graph.io;
                 const self: *AddModules = @fieldParentPtr("step", step);
-                const module_compile_args = blk: {
-                    var file = try std.fs.cwd().openFile(self.module_compile_args_file.getPath2(step.owner, step), .{});
-                    defer file.close();
-                    break :blk try file.readToEndAlloc(step.owner.allocator, std.math.maxInt(usize));
-                };
+                const file_path = self.module_compile_args_file.getPath2(step.owner, step);
+
+                const module_compile_args = try std.Io.Dir.cwd().readFileAlloc(io, file_path, step.owner.allocator, .unlimited);
                 defer step.owner.allocator.free(module_compile_args);
 
                 var files: std.ArrayListUnmanaged([]const u8) = .{};
@@ -524,7 +524,7 @@ fn addPythonExe(
                             .{ prefix, line },
                         );
                         const inc_sub_path = step.owner.dupe(path[prefix.len..]);
-                        self.exe.addIncludePath(self.upstream.path(inc_sub_path));
+                        self.exe.root_module.addIncludePath(self.upstream.path(inc_sub_path));
                     } else std.debug.panic("todo: parse module-compile-args line '{s}'", .{line});
                 }
 
@@ -551,7 +551,7 @@ fn addPythonExe(
         exe.step.dependOn(&add_modules.step);
     }
 
-    exe.addCSourceFiles(.{
+    exe.root_module.addCSourceFiles(.{
         .root = upstream.path("."),
         .files = switch (args.stage) {
             .freeze_module => concat(b.allocator, &.{
@@ -598,14 +598,14 @@ fn addPythonExe(
         }),
     });
 
-    exe.addCSourceFile(.{
+    exe.root_module.addCSourceFile(.{
         .file = args.makesetup_out.path(b, "config.c"),
         .flags = &flags_common,
     });
 
     switch (args.stage) {
         .freeze_module => {},
-        .bootstrap, .final => exe.addCSourceFile(.{
+        .bootstrap, .final => exe.root_module.addCSourceFile(.{
             .file = upstream.path("Modules/getpath.c"),
             .flags = &(flags_common ++ [_][]const u8{
                 "-DPREFIX=\"\"",
@@ -618,17 +618,17 @@ fn addPythonExe(
     switch (args.stage) {
         .freeze_module, .bootstrap => {},
         .final => |final| {
-            exe.addCSourceFile(.{ .file = final.deepfreeze_c, .flags = &flags_common });
+            exe.root_module.addCSourceFile(.{ .file = final.deepfreeze_c, .flags = &flags_common });
         },
     }
 
     if (target.result.os.tag == .windows) {
-        exe.addCSourceFile(.{
+        exe.root_module.addCSourceFile(.{
             .file = upstream.path("Python/dynload_win.c"),
             .flags = &flags_common,
         });
     } else {
-        exe.addCSourceFile(.{
+        exe.root_module.addCSourceFile(.{
             .file = upstream.path("Python/dynload_shlib.c"),
             .flags = &(flags_common ++ .{
                 "-DSOABI=\"cpython-311-x86_64-linux-gnu\"",
@@ -636,13 +636,12 @@ fn addPythonExe(
         });
     }
 
-    exe.linkLibC();
-    if (args.pyconfig.libs.zlib) |zlib| exe.linkLibrary(zlib);
-    if (args.pyconfig.libs.openssl) |openssl| exe.linkLibrary(openssl);
+    if (args.pyconfig.libs.zlib) |zlib| exe.root_module.linkLibrary(zlib);
+    if (args.pyconfig.libs.openssl) |openssl| exe.root_module.linkLibrary(openssl);
 
     if (target.result.os.tag == .windows) {
-        exe.linkSystemLibrary("ws2_32");
-        exe.linkSystemLibrary("api-ms-win-core-path-l1-1-0");
+        exe.root_module.linkSystemLibrary("ws2_32", .{});
+        exe.root_module.linkSystemLibrary("api-ms-win-core-path-l1-1-0", .{});
     }
 
     // TODO: do we need this
