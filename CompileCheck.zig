@@ -36,7 +36,7 @@ pub fn create(b: *std.Build, target: std.Build.ResolvedTarget, kind: Kind) *Comp
     const source_path = write_files.add(
         switch (kind) {
             .exe => "compilecheck-exe.c",
-            .header => "copmilecheck-header.c",
+            .header => "compilecheck-header.c",
         },
         source_duped,
     );
