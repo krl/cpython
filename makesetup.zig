@@ -175,10 +175,10 @@ fn parseSetupFile(
                 if (!valid_name) errExit("{s}:{}: invalid module name '{s}'", .{ file_path, lineno, name });
             }
 
-            var defines: std.ArrayListUnmanaged([]const u8) = .{};
-            var compile_args: std.ArrayListUnmanaged(CompileArg) = .{};
-            var libraries: std.ArrayListUnmanaged([]const u8) = .{};
-            var libs: std.ArrayListUnmanaged([]const u8) = .{};
+            var defines: std.ArrayList([]const u8) = .empty;
+            var compile_args: std.ArrayList(CompileArg) = .empty;
+            var libraries: std.ArrayList([]const u8) = .empty;
+            var libs: std.ArrayList([]const u8) = .empty;
             while (parts.next()) |part| {
                 if (std.mem.startsWith(u8, part, "$")) {
                     // seems ok to ignore these for now

@@ -507,7 +507,7 @@ fn addPythonExe(
                 const module_compile_args = try std.Io.Dir.cwd().readFileAlloc(io, file_path, step.owner.allocator, .unlimited);
                 defer step.owner.allocator.free(module_compile_args);
 
-                var files: std.ArrayListUnmanaged([]const u8) = .{};
+                var files: std.ArrayList([]const u8) = .empty;
                 defer files.deinit(step.owner.allocator);
 
                 var line_it = std.mem.splitScalar(u8, module_compile_args, '\n');

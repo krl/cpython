@@ -9,8 +9,8 @@ source_content: []const u8,
 source_path: std.Build.LazyPath,
 result: ?Result = null,
 
-include_dirs: std.ArrayListUnmanaged(std.Build.Module.IncludeDir) = .{},
-link_objects: std.ArrayListUnmanaged(std.Build.Module.LinkObject) = .{},
+include_dirs: std.ArrayList(std.Build.Module.IncludeDir) = .empty,
+link_objects: std.ArrayList(std.Build.Module.LinkObject) = .empty,
 
 const Result = union(enum) {
     pass,
