@@ -193,9 +193,30 @@ fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!voi
                 }
             }
         }
-        break :blk try std.process.run(b.allocator, b.graph.io, .{
-            .argv = zig_args.items,
-        });
+        switch (check.kind) {
+            .exe => {
+                var rand_int: u64 = undefined;
+                b.graph.io.random(std.mem.asBytes(&rand_int));
+                const path = "tmp" ++ std.fs.path.sep_str ++ std.fmt.hex(rand_int);
+                b.cache_root.handle.createDirPath(b.graph.io, path) catch |err| return step.fail(
+                    "create dir '{f}{s}' failed with {t}",
+                    .{ b.cache_root, path, err },
+                );
+                const emit_bin_path = try b.cache_root.join(b.allocator, &.{ path, "compilecheck-exe" });
+                try zig_args.append(b.fmt("-femit-bin={s}", .{emit_bin_path}));
+                const result = try std.process.run(b.allocator, b.graph.io, .{
+                    .argv = zig_args.items,
+                });
+                try b.cache_root.handle.deleteTree(b.graph.io, path);
+                break :blk result;
+            },
+            .header => {
+                try zig_args.append("-fno-emit-bin");
+                break :blk try std.process.run(b.allocator, b.graph.io, .{
+                    .argv = zig_args.items,
+                });
+            },
+        }
     };
 
     std.debug.assert(result.stdout.len == 0);
