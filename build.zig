@@ -218,6 +218,8 @@ pub fn build(b: *std.Build) !void {
             },
         },
     });
+    b.installArtifact(final_exe);
+
     const final_packaged = packagePython(b, version, upstream, final_exe);
     const install_final = b.addInstallDirectory(.{
         .source_dir = final_packaged.root,
